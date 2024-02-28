@@ -1,19 +1,20 @@
+#include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/ip.h>
-#include <cassert>
-#include <iostream>
-#include <fcntl.h>
-#include <unordered_map>
+#include <string>
 #include <vector>
-#include <poll.h>
-#include <map>
+// proj
+#include "hashtable.h"
+#include <iostream>
 
 #ifndef NDEBUG
 #   define toydies_assert(condition, message) \
@@ -27,6 +28,18 @@
 #else
 #   define ASSERT(condition, message) do { } while (false)
 #endif
+
+
+/**
+ * 
+ *  member is a member in struct type, this function give
+ *  the ptr of member and return the total type ptr,
+ *  the main reason for this is for instructibe data type
+*/
+#define container_of(ptr, type, member) ({                  \
+    const typeof( ((type *)0)->member ) *__mptr = (ptr);    \
+    (type *)( (char *)__mptr - offsetof(type, member) );})
+
 
 const size_t k_max_msg = 4096; //4k
 
@@ -176,46 +189,88 @@ static CMD parser_cmd(const std::vector<std::string> &cmd)
     }
 }
 
-// TODO:finish kv storgae
-// The data structure for the key space. This is just a placeholder
-// until we implement a hashtable in the next chapter.
-static std::map<std::string, std::string> g_map;
+//------KV-----part
 
-static uint32_t do_get(const std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
+static uint64_t str_hash(const uint8_t *data, size_t len) {
+    uint32_t h = 0x811C9DC5;
+    for (size_t i = 0; i < len; i++) {
+        h = (h + data[i]) * 0x01000193;
+    }
+    return h;
+}
+
+struct Entry{
+    struct HNode node;
+    std::string k;
+    std::string v;
+};
+
+static struct {
+    Hashmap db;
+}g_data;
+
+static bool entry_eq(HNode *lhs, HNode *rhs) {
+    struct Entry *le = container_of(lhs, struct Entry, node);
+    struct Entry *re = container_of(rhs, struct Entry, node);
+    return le->k == re->k;
+}
+
+
+static uint32_t do_get(std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
 {
-    auto key = cmd[1];
-
-    if(!g_map.count(key))
-    {
+    Entry entry;
+    entry.k.swap(cmd[1]);
+    entry.node.hashcode = str_hash((uint8_t *)entry.k.data(), entry.k.size());
+    HNode *node = hm_lookup(&g_data.db, &entry.node, &entry_eq);
+    if (!node) {
         return RES_NX;
     }
-    
-    auto &val = g_map[key];
-    
-    toydies_assert(val.size() <= k_max_msg,"value too long");
-
-    memcpy(res,val.data(),val.size());
-
+    const std::string &val = container_of(node, Entry, node)->v;
+    assert(val.size() <= k_max_msg);
+    std::cout << "res:  " << val << "\n";
+    memcpy(res, val.data(), val.size());
     *reslen = (uint32_t)val.size();
-
     return RES_OK;
 }
 
 static uint32_t do_set(
-    const std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
+    std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
 {
     (void)res;
     (void)reslen;
-    g_map[cmd[1]] = cmd[2];
+
+    Entry entry;
+    // entry.k get the value
+    entry.k.swap(cmd[1]);
+    entry.node.hashcode = str_hash((uint8_t *)entry.k.data(), entry.k.size());
+    auto node = hm_lookup(&g_data.db,&entry.node,&entry_eq);
+    if(node){
+        // 如果已经有k了，那么修改这个k对应的值
+        container_of(node,Entry,node)->v.swap(cmd[2]);
+    }else{
+        //如果没有k，则进行初始化,必须new一块heap上的内存，不能declear临时变量
+        Entry *ent = new Entry();
+        ent->k.swap(entry.k);
+        ent->node.hashcode = entry.node.hashcode;
+        ent->v.swap(cmd[2]);
+        hm_insert(&g_data.db, &ent->node);
+    }
     return RES_OK;
 }
 
 static uint32_t do_del(
-    const std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
+    std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
 {
     (void)res;
     (void)reslen;
-    g_map.erase(cmd[1]);
+    Entry entry;
+    entry.k.swap(cmd[1]);
+    entry.node.hashcode = str_hash((uint8_t *)entry.k.data(), entry.k.size());
+
+    HNode *node = hm_pop(&g_data.db, &entry.node, &entry_eq);
+    if (node) {
+        delete container_of(node, Entry, node);
+    }
     return RES_OK;
 }
 
@@ -494,7 +549,6 @@ int main(){
         toydies_assert(rv >=0, "error in poll");
           
         // handle 
-
 
         for (size_t i = 1; i < events.size(); i++)
         {
