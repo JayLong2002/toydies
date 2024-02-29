@@ -133,6 +133,7 @@ const size_t k_max_args = 1024;
     | nstr | len | str1 | len | str2 | ... | len | strn |
     +------+-----+------+-----+------+-----+-----+------+
 */
+// 把len这么长的data里面的命令解析到out里面
 static int32_t parse_req(
     const uint8_t *data, size_t len, std::vector<std::string> &out)
 {
@@ -173,6 +174,7 @@ enum CMD{
     GET,
     SET,
     DEL,
+    KEYS,
     UNKNOWN
 };
 
@@ -216,29 +218,55 @@ static bool entry_eq(HNode *lhs, HNode *rhs) {
 }
 
 
-static uint32_t do_get(std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
-{
+//-----------handle part--------
+//----------Serialization------part
+enum DATA_TYPE{
+    SER_NIL = 0,    // Like `NULL`
+    SER_ERR = 1,    // An error code and message
+    SER_STR = 2,    // A string
+    SER_INT = 3,    // A int64
+};
+
+// --- warpper
+static void out_null(std::string &out) {
+    out.push_back(SER_NIL);
+}
+
+static void out_str(std::string &out, const std::string &val) {
+    out.push_back(SER_STR);
+    uint32_t len = (uint32_t)val.size();
+    out.append((char *)&len, 4);
+    out.append(val);
+}
+
+static void out_int(std::string &out, int64_t val) {
+    out.push_back(SER_INT);
+    out.append((char *)&val, 8);
+}
+
+static void out_err(std::string &out, int32_t code, const std::string &msg) {
+    out.push_back(SER_ERR);
+    out.append((char *)&code, 4);
+    uint32_t len = (uint32_t)msg.size();
+    out.append((char *)&len, 4);
+    out.append(msg);
+}
+
+static void do_get(std::vector<std::string> &cmd, std::string &out){
     Entry entry;
     entry.k.swap(cmd[1]);
     entry.node.hashcode = str_hash((uint8_t *)entry.k.data(), entry.k.size());
     HNode *node = hm_lookup(&g_data.db, &entry.node, &entry_eq);
     if (!node) {
-        return RES_NX;
+        return  out_null(out);
     }
     const std::string &val = container_of(node, Entry, node)->v;
     assert(val.size() <= k_max_msg);
-    std::cout << "res:  " << val << "\n";
-    memcpy(res, val.data(), val.size());
-    *reslen = (uint32_t)val.size();
-    return RES_OK;
+    out_str(out, val);
 }
 
-static uint32_t do_set(
-    std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
-{
-    (void)res;
-    (void)reslen;
 
+static void do_set(std::vector<std::string> &cmd, std::string &out){
     Entry entry;
     // entry.k get the value
     entry.k.swap(cmd[1]);
@@ -255,14 +283,11 @@ static uint32_t do_set(
         ent->v.swap(cmd[2]);
         hm_insert(&g_data.db, &ent->node);
     }
-    return RES_OK;
+    return out_null(out);
 }
 
-static uint32_t do_del(
-    std::vector<std::string> &cmd, uint8_t *res, uint32_t *reslen)
-{
-    (void)res;
-    (void)reslen;
+
+static void do_del(std::vector<std::string> &cmd, std::string &out){
     Entry entry;
     entry.k.swap(cmd[1]);
     entry.node.hashcode = str_hash((uint8_t *)entry.k.data(), entry.k.size());
@@ -271,48 +296,24 @@ static uint32_t do_del(
     if (node) {
         delete container_of(node, Entry, node);
     }
-    return RES_OK;
+    return out_int(out, node ? 1 : 0);;
 }
 
-/**
- * @brief do request
- * @param req : the buffer of request
- * @param reqlen : the len of request 
- * @param resmsg : the state back from doing request
- * @param res : the return msg to stay
- * @param reslen : this param should fill by doing function, told the returen msg length
- * 
-*/
-static int32_t do_request(
-    const uint8_t *req,uint32_t reqlen,
-    uint32_t *rescode,uint8_t *res,uint32_t *reslen
-)
+// handle one request one time ,and put the msg into out
+static void do_request(std::vector<std::string> &cmd,std::string &out)
 {
-    std::vector<std::string> cmd;
-    int32_t rv = parse_req(req,reqlen,cmd);
-    if(rv){
-        msg("error in req!");
-        return -1;
-    }
-
     auto cmd_type = parser_cmd(cmd);
 
     //request handler
     if (cmd_type == GET) {
-        *rescode = do_get(cmd, res, reslen);
+        do_get(cmd,out);
     } else if (cmd_type == SET) {
-        *rescode = do_set(cmd, res, reslen);
+        do_set(cmd,out);
     } else if (cmd_type == DEL) {
-        *rescode = do_del(cmd, res, reslen);
-    } else {
-        // cmd is not recognized
-        *rescode = RES_ERR;
-        const char *msg = "Unknown cmd";
-        strcpy((char *)res, msg);
-        *reslen = strlen(msg);
-        return 0;
+        do_del(cmd,out);
+    }else{
+        out_err(out, 2, "Unknown cmd");
     }
-    return 0;
 }
 
 // maybe more than one request one buffer
@@ -333,26 +334,23 @@ static bool try_handle_request(connection *conn)
     // wait another call,data lack
     if(4 + len > conn->rbuf_offset ) return false;
 
-    uint32_t rescode = 0;
-    uint32_t wlen = 0 ;
-    
-    int32_t rv = do_request(
-        &conn->rbuf[4], len,
-        &rescode, &conn->wbuf[8], &wlen
-    );
-
-    if (rv) {
+    //parser the request
+    std::vector<std::string> cmd;
+    if (0 != parse_req(&conn->rbuf[4], len, cmd)) {
+        msg("bad req");
         conn->state = END;
         return false;
     }
 
-    // return msg : len(not include len self) + rescode + resbody
-    wlen += 4;
-    // generating echoing response
+    std::string out;
+    do_request(cmd, out);
+
+    // back msg : wlen(4)--out(type-length-value)
+    uint32_t wlen = (uint32_t)out.size();
     memcpy(&conn->wbuf[0], &wlen, 4);
+    memcpy(&conn->wbuf[4], out.data(), out.size());
     
-    memcpy(&conn->wbuf[4], &rescode, 4);
-    
+    //TODO: check the state
     conn->wbuf_offset = 4 + wlen;
 
     size_t remain = conn->rbuf_offset - 4 - len;
