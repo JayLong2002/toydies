@@ -126,13 +126,6 @@ enum REQUEST_STATE{
 
 const size_t k_max_args = 1024;
 
-
-/*
-    the protocal msg
-    +------+-----+------+-----+------+-----+-----+------+
-    | nstr | len | str1 | len | str2 | ... | len | strn |
-    +------+-----+------+-----+------+-----+-----+------+
-*/
 // 把len这么长的data里面的命令解析到out里面
 static int32_t parse_req(
     const uint8_t *data, size_t len, std::vector<std::string> &out)
