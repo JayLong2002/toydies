@@ -88,8 +88,7 @@ void SkipList<K, V>::createList(K footerKey) {
 
 template<typename K, typename V>
 void SkipList<K, V>::createNode(int level, Node<K, V> *&node) {
-    node = new Node<K, V>(NULL, NULL);
-    //需要初始化数组
+    node = new Node<K, V>(K{}, V{});
     //注意:这里是level+1而不是level,因为数组是从0-level
     node->forward = new Node<K, V> *[level + 1];
     node->nodeLevel = level;

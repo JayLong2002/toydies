@@ -9,7 +9,7 @@ int main(){
 
     //给一个最大的整型值
     SkipList<int, int> skipList(0x7fffffff);
-
+   // SkipList<std::string,std::string> sl(std::string("213"));
     int length = 10;
 
     for (int i = 1; i <= length; ++i) {

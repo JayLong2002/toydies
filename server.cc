@@ -15,6 +15,7 @@
 // proj
 #include "hashtable.h"
 #include <iostream>
+#include "skiplist.h"
 
 #ifndef NDEBUG
 #   define toydies_assert(condition, message) \
@@ -116,7 +117,6 @@ static void server_reading(connection *conn)
 
 static void server_sending(connection *conn);
 
-
 // the state of request 
 enum REQUEST_STATE{
     RES_OK = 0,
@@ -167,7 +167,7 @@ enum CMD{
     GET,
     SET,
     DEL,
-    KEYS,
+    SEARCH,
     UNKNOWN
 };
 
@@ -179,7 +179,9 @@ static CMD parser_cmd(const std::vector<std::string> &cmd)
         return SET;
     } else if (cmd.size() == 2 && cmd_is(cmd[0], "del")) {
         return DEL;
-    } else {
+    } else if(cmd.size() == 3 && cmd_is(cmd[0],"search")){
+        return SEARCH;
+    } else{
         return UNKNOWN;
     }
 }
@@ -200,8 +202,10 @@ struct Entry{
     std::string v;
 };
 
-static struct {
+static struct kv{
     Hashmap db;
+    SkipList<int,std::string> sl;
+    kv():sl(0x7fffffff){};
 }g_data;
 
 static bool entry_eq(HNode *lhs, HNode *rhs) {
@@ -218,6 +222,7 @@ enum DATA_TYPE{
     SER_ERR = 1,    // An error code and message
     SER_STR = 2,    // A string
     SER_INT = 3,    // A int64
+    SER_LIST = 4,   // an (k - v)array in range search
 };
 
 // --- warpper
@@ -245,6 +250,22 @@ static void out_err(std::string &out, int32_t code, const std::string &msg) {
     out.append(msg);
 }
 
+static void out_search(std::string &out, std::vector<Node<int, std::string> *> &ans){
+    out.push_back(SER_LIST);
+    // flag | size | each of them 
+    uint32_t nums = (uint32_t)(2 * ans.size());
+    toydies_assert(nums % 2 == 0 ,"error in kv nums");
+    out.append((char *)&nums, 4);
+    for(auto x : ans){
+        auto v = x->getKey();
+        // string k
+        auto k = x->getValue();
+        // int value
+        out.append(k);
+        out.append(std::to_string(v));
+    }
+}
+
 static void do_get(std::vector<std::string> &cmd, std::string &out){
     Entry entry;
     entry.k.swap(cmd[1]);
@@ -259,9 +280,19 @@ static void do_get(std::vector<std::string> &cmd, std::string &out){
 }
 
 
+//TODO: add skiplist feature
 static void do_set(std::vector<std::string> &cmd, std::string &out){
     Entry entry;
-    // entry.k get the value
+
+    // set k v
+    // store in (int)v k
+    auto k = std::stoi(cmd[2]);
+    // string to int
+
+    // key
+    auto v = cmd[1];
+    g_data.sl.insert(k,v);
+    
     entry.k.swap(cmd[1]);
     entry.node.hashcode = str_hash((uint8_t *)entry.k.data(), entry.k.size());
     auto node = hm_lookup(&g_data.db,&entry.node,&entry_eq);
@@ -280,9 +311,14 @@ static void do_set(std::vector<std::string> &cmd, std::string &out){
 }
 
 
+//TODO: support skip list
 static void do_del(std::vector<std::string> &cmd, std::string &out){
     Entry entry;
     entry.k.swap(cmd[1]);
+    auto k = std::stoi(cmd[2]);
+    auto v = g_data.sl.search(k)->getValue();
+    g_data.sl.remove(k,v);
+
     entry.node.hashcode = str_hash((uint8_t *)entry.k.data(), entry.k.size());
 
     HNode *node = hm_pop(&g_data.db, &entry.node, &entry_eq);
@@ -291,6 +327,18 @@ static void do_del(std::vector<std::string> &cmd, std::string &out){
     }
     return out_int(out, node ? 1 : 0);;
 }
+
+//TODO:
+static void do_search(std::vector<std::string> &cmd,std::string &out){
+    // search k2 k2 
+    auto k1 = stoi(cmd[1]);
+    auto k2 = stoi(cmd[2]);
+    auto vec = g_data.sl.range_search(k1,k2);
+
+    // list of string between the 
+    out_search(out,vec);
+}
+
 
 // handle one request one time ,and put the msg into out
 static void do_request(std::vector<std::string> &cmd,std::string &out)
@@ -304,7 +352,9 @@ static void do_request(std::vector<std::string> &cmd,std::string &out)
         do_set(cmd,out);
     } else if (cmd_type == DEL) {
         do_del(cmd,out);
-    }else{
+    }else if(cmd_type == SEARCH){
+        do_search(cmd,out);
+    }else {
         out_err(out, 2, "Unknown cmd");
     }
 }
