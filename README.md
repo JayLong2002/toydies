@@ -1,8 +1,9 @@
 # toydies
 
-**a simple redies**
-<br>
-**support feature: get set del**
+一个简化的redies实现，参考了redies部分设计和代码
+# 支持功能
+## set
+## get
+## del
+## search(范围查询)
 
-serialization specification:
-toydies msg return type len value
