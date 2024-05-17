@@ -166,6 +166,7 @@ static bool try_handle_request(connection *conn)
     uint32_t wlen = (uint32_t)out.size();
     memcpy(&conn->wbuf[0], &wlen, 4);
     memcpy(&conn->wbuf[4], out.data(), out.size());
+    std::cout << "out : " << out << "\n";
     
     conn->wbuf_offset = 4 + wlen;
 

@@ -102,8 +102,10 @@ static void out_search(std::string &out, std::vector<Node<int, std::string> *> &
         // string k
         auto k = x->getValue();
         // int value
-        out.append(k);
-        out.append(std::to_string(v));
+        std::cout << "k :" << k << "\n";
+        std::cout << "v :" << v << "\n";
+        out_str(out,k);
+        out_int(out,v);
     }
 }
 
@@ -156,13 +158,19 @@ static void do_set(std::vector<std::string> &cmd, std::string &out){
 static void do_del(std::vector<std::string> &cmd, std::string &out){
     Entry entry;
     entry.k.swap(cmd[1]);
-    auto k = std::stoi(cmd[2]);
-    auto v = g_data.sl.search(k)->getValue();
-    g_data.sl.remove(k,v);
-
+    //TODO:如何根据k找到v
     entry.node.hashcode = str_hash((uint8_t *)entry.k.data(), entry.k.size());
-
     HNode *node = hm_pop(&g_data.db, &entry.node, &entry_eq);
+
+    const std::string &val = container_of(node, Entry, node)->v;
+
+    auto sl_k = std::stoi(val);
+
+    auto v = g_data.sl.search(sl_k)->getValue();
+
+    g_data.sl.remove(sl_k,v);
+
+
     if (node) {
         delete container_of(node, Entry, node);
     }

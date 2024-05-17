@@ -188,7 +188,9 @@ static int32_t read_res(int fd) {
     }
 
     // print the result
-    int32_t rv = on_response((uint8_t *)&rbuf[4], len);
+    //int32_t rv = on_response((uint8_t *)&rbuf[4], len);
+    auto rv = len;
+    
     if (rv > 0 && (uint32_t)rv != len) {
         msg("bad response");
         rv = -1;
@@ -215,6 +217,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
         cmd.push_back(argv[i]);
     }
+
     int32_t err = send_req(fd, cmd);
     if (err) {
         goto L_DONE;
